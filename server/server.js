@@ -1,34 +1,44 @@
 const dgram = require('dgram');
-const server = dgram.createSocket('udp4');
-const PORT = 5000;
-const ROOM_LEN = 12; // kode room max 12 karakter
+const net = require('net');
 
-// Simpen member per room: { "NINJA-BEKASI": [ {address, port},... ] }
-const rooms = {};
+// ========== KONFIGURASI ==========
+const UDP_PORT = 5000;  // Port buat suara Opus
+const TCP_PORT = 5001;  // Port buat login, channel, PTT
 
-server.on('message', (msg, rinfo) => {
-  // 12 byte pertama = nama room, sisanya = data suara Opus
-  const roomName = msg.toString('utf8', 0, ROOM_LEN).trim();
-  const audioData = msg.slice(ROOM_LEN);
+const udpServer = dgram.createSocket('udp4');
+const tcpServer = net.createServer();
 
-  // Daftarin client ke room kalo belum ada
-  if (!rooms[roomName]) rooms[roomName] = [];
-  if (!rooms[roomName].find(c => c.address === rinfo.address && c.port === rinfo.port)) {
-    rooms[roomName].push({ address: rinfo.address, port: rinfo.port });
-    console.log(`${rinfo.address} join room ${roomName}`);
-  }
+// Simpan data member: { id: { name, channel, address, port, tcpSocket } }
+const members = new Map();
 
-  // Broadcast ke semua member room kecuali pengirim
-  if (rooms[roomName]) {
-    rooms[roomName].forEach(client => {
-      if (client.address!== rinfo.address || client.port!== rinfo.port) {
-        server.send(msg, client.port, client.address);
-      }
-    });
-  }
+console.log('Ninja Talky Server starting...');
+
+// ========== 1. SERVER UDP - BUAT SUARA ==========
+udpServer.on('message', (msg, rinfo) => {
+    // Cari siapa yg ngirim berdasarkan IP+Port
+    let senderId = null;
+    for (let [id, data] of members) {
+        if (data.address === rinfo.address && data.port === rinfo.port) {
+            senderId = id;
+            break;
+        }
+    }
+
+    // Kalo belum login, buang aja paketnya
+    if (!senderId) return;
+
+    const sender = members.get(senderId);
+    const channel = sender.channel;
+
+    // Broadcast suara ke semua member di channel yg sama, kecuali pengirim
+    for (let [id, member] of members) {
+        if (id !== senderId && member.channel === channel) {
+            udpServer.send(msg, member.port, member.address, (err) => {
+                if (err) console.log(`Gagal kirim ke ${member.name}: ${err}`);
+            });
+        }
+    }
 });
 
-server.on('listening', () => {
-  console.log(`Ninja Talky Server jalan di port ${PORT}`);
-});
-server.bind(PORT);
+udpServer.on('listening', () => {
+    console.log(`UDP
